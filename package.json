@@ -7,9 +7,10 @@
     "dev": "next dev",
     "build": "next build && next-sitemap",
     "start": "next start",
-    "generate": "ts-node ./scripts/generator/index.ts",
-    "publish-social": "ts-node ./scripts/publisher/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "generate": "node scripts/generator/index.js",
+    "publish-social": "node scripts/publisher/index.js"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",
@@ -30,7 +31,6 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.7",
-    "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   }
 }
