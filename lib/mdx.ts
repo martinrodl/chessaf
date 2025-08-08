@@ -10,6 +10,21 @@ export function readMDX(filePath: string) {
   return { frontMatter: data as any, content };
 }
 
+export function listMdxFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (p: string) => {
+    if (!fs.existsSync(p)) return;
+    for (const f of fs.readdirSync(p)) {
+      const fp = path.join(p, f);
+      const st = fs.statSync(fp);
+      if (st.isDirectory()) walk(fp);
+      else if (fp.endsWith(".mdx")) out.push(fp);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
 export function listArticles(siteId: string, locale: string) {
   const dir = path.join(CONTENT_ROOT, siteId, locale, "blog");
   const files: string[] = [];
