@@ -8,6 +8,7 @@
     "build": "next build && next-sitemap",
     "start": "next start",
     "generate": "ts-node ./scripts/generator/index.ts",
+    "gen:one": "ts-node ./scripts/generator/index.ts",
     "publish-social": "ts-node ./scripts/publisher/index.ts",
     "typecheck": "tsc --noEmit"
   },

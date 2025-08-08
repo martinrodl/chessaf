@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { buildMCP } from "./mcp";
+import { generateFromMCP } from "./llm";
+import { slugify, dateParts, ensureDir, hmacSignature } from "./utils";
 
 // Input shape interface
 interface GeneratorInput {
@@ -10,117 +13,135 @@ interface GeneratorInput {
   affiliate?: { chesscom?: string };
 }
 
-function slugify(str: string) {
-  return str
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
-
 async function main() {
-  // Accept: --input=path OR stdin JSON OR env GENERATOR_JSON
-  const argInput = process.argv
-    .find((a) => a.startsWith("--input="))
-    ?.split("=")[1];
-  let dataRaw: string | undefined;
-  if (argInput) dataRaw = fs.readFileSync(argInput, "utf8");
-  else if (process.env.GENERATOR_JSON) dataRaw = process.env.GENERATOR_JSON;
-  else {
-    // read stdin if piped
-    if (!process.stdin.isTTY) {
-      dataRaw = await new Promise<string>((resolve) => {
-        let buf = "";
-        process.stdin.setEncoding("utf8");
-        process.stdin.on("data", (c) => (buf += c));
-        process.stdin.on("end", () => resolve(buf));
-      });
-    }
-  }
-  if (!dataRaw) {
-    console.error("No input JSON provided");
+  const topics = await readTopics();
+  const indexArg = process.argv.find((a) => a.startsWith("--i="))?.split("=")[1];
+  const idx = indexArg ? parseInt(indexArg, 10) : 0;
+  const topic = topics[idx];
+  if (!topic) {
+    console.error("No topic at index", idx);
     process.exit(1);
   }
+  const envSite = process.env.GEN_DEFAULT_SITEID;
+  const envLocale = process.env.GEN_DEFAULT_LOCALE;
+  const siteId = envSite || topic.siteId || "default";
+  const locale = envLocale || topic.locale || "en";
+  console.log(
+    `[topic] ${idx} -> title="${topic.title}" site=${siteId} locale=${locale}`
+  );
 
-  let input: GeneratorInput;
-  try {
-    input = JSON.parse(dataRaw);
-  } catch (e) {
-    console.error("Invalid JSON", e);
-    process.exit(1);
-    return;
-  }
+  const mcp = buildMCP({
+    siteId,
+    locale,
+    title: topic.title,
+    keywords: topic.keywords || [],
+  });
+  const { markdown } = await generateFromMCP(mcp);
 
-  const { siteId, locale, title } = input;
-  if (!siteId || !locale || !title) {
-    console.error("Missing required fields siteId, locale, title");
-    process.exit(1);
-  }
+  const fm = extractFrontMatter(markdown);
+  const title = (fm.title as string) || topic.title;
+  let baseSlug = fm.slug ? String(fm.slug) : slugify(title);
+  if (!baseSlug) baseSlug = slugify(topic.title) || "clanek";
 
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
-
-  const baseSlug = slugify(title) || `${yyyy}-${mm}-${dd}`;
-  const datedPath = `${yyyy}/${mm}`;
-  const relDir = path.join("content", siteId, locale, "blog", datedPath);
+  const { y, m } = dateParts();
+  const relDir = path.join("content", siteId, locale, "blog", y, m);
   const absDir = path.join(process.cwd(), relDir);
-  fs.mkdirSync(absDir, { recursive: true });
+  await ensureDir(absDir);
 
   let finalSlug = baseSlug;
   let counter = 1;
   while (fs.existsSync(path.join(absDir, `${finalSlug}.mdx`))) {
     finalSlug = `${baseSlug}-${counter++}`;
   }
-
-  const frontMatter = {
-    title,
-    description: input.topic?.slice(0, 200) || "",
-    publishedAt: `${yyyy}-${mm}-${dd}`,
-    affiliate: input.affiliate || {},
-  };
-
-  const mdxBody = `---\n${Object.entries(frontMatter)
-    .map(([k, v]) => {
-      if (typeof v === "object" && v)
-        return `${k}:\n${Object.entries(v)
-          .map(([sk, sv]) => `  ${sk}: "${sv}"`)
-          .join("\n")}`;
-      return `${k}: "${String(v).replace(/"/g, '\\"')}"`;
-    })
-    .join("\n")}\n---\n\n<CTA href="${
-    frontMatter.affiliate?.chesscom || "#"
-  }">Trénuj na Chess.com</CTA>\n\n## Úvod\n${
-    input.topic || "Krátký úvod."
-  }\n\n<Tip>První tip – zaměř se na centrum.</Tip>\n\n## Další sekce\nObsah vygenerovaný placeholderem.\n`;
-
   const absFile = path.join(absDir, `${finalSlug}.mdx`);
-  fs.writeFileSync(absFile, mdxBody, "utf8");
-  console.log("Written", absFile);
+  fs.writeFileSync(absFile, markdown, "utf8");
+  console.log(`[write] ${absFile}`);
 
-  // Call revalidate endpoint
-  const siteUrl = process.env.SITE_URL || "http://localhost:3000";
-  const token = process.env.REVALIDATE_SECRET;
-  if (!token) {
-    console.warn("REVALIDATE_SECRET not set, skipping revalidate call");
-    return;
-  }
-  const slugPath = `${yyyy}/${mm}/${finalSlug}`;
-  const res = await fetch(`${siteUrl}/api/revalidate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-revalidate-token": token,
-    },
-    body: JSON.stringify({ siteId, locale, slug: slugPath }),
-  });
-  console.log("Revalidate status", res.status);
+  // Git commit
   try {
-    console.log(await res.json());
-  } catch {}
+    const relFile = path.relative(process.cwd(), absFile);
+    const { execSync } = await import("node:child_process");
+    execSync(`git add ${JSON.stringify(relFile)}`);
+    execSync(
+      `git commit -m ${JSON.stringify(`content: ${locale}/${finalSlug}`)}`,
+      { stdio: "inherit" }
+    );
+    console.log("[git] committed");
+  } catch (e) {
+    console.warn("[git] commit failed (continuing)", (e as any)?.message);
+  }
+
+  // Revalidate
+  const bodyObj = { siteId, locale, slug: `${y}/${m}/${finalSlug}` };
+  const body = JSON.stringify(bodyObj);
+  const secret = process.env.REVALIDATE_SECRET;
+  const siteUrl = process.env.SITE_URL || "http://localhost:3000";
+  let revalidated = false;
+  if (secret) {
+    try {
+      const sig = hmacSignature(secret, body);
+      const res = await fetch(`${siteUrl}/api/revalidate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-revalidate-token": secret,
+          "x-signature": sig,
+        },
+        body,
+      });
+      const js = await res.json().catch(() => ({}));
+      revalidated = res.ok && js.ok;
+      console.log(`[revalidate] status=${res.status} ok=${revalidated}`);
+    } catch (e) {
+      console.warn("[revalidate] failed", (e as any)?.message);
+    }
+  } else {
+    console.warn("[revalidate] missing REVALIDATE_SECRET");
+  }
+
+  console.log(
+    `[done] slug=${finalSlug} path=${bodyObj.slug} revalidated=${revalidated}`
+  );
+}
+
+function extractFrontMatter(markdown: string): Record<string, any> {
+  const m = markdown.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return {};
+  const lines = m[1].split(/\n/);
+  const fm: Record<string, any> = {};
+  let currentKey: string | null = null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (/^[A-Za-z0-9_-]+:/.test(line)) {
+      const [k, ...rest] = line.split(":");
+      const vRaw = rest.join(":").trim();
+      if (vRaw === "") {
+        currentKey = k;
+        fm[k] = {};
+        continue;
+      }
+      fm[k] = vRaw.replace(/^"|"$/g, "").replace(/^'/, "").replace(/'$/, "");
+      currentKey = k;
+    } else if (currentKey && line.startsWith("  ")) {
+      // nested (simple key: value)
+      const nested = line.trim();
+      const [nk, ...nrest] = nested.split(":");
+      if (typeof fm[currentKey] !== "object" || fm[currentKey] === null)
+        fm[currentKey] = {};
+      (fm[currentKey] as any)[nk] = nrest.join(":").trim().replace(/^"|"$/g, "");
+    }
+  }
+  return fm;
+}
+
+async function readTopics(): Promise<Topic[]> {
+  const p = path.join(
+    process.cwd(),
+    "scripts",
+    "generator",
+    "topics.json"
+  );
+  return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
 main().catch((e) => {
