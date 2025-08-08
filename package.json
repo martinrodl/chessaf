@@ -1,0 +1,36 @@
+{
+  "name": "chess-affiliate",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && next-sitemap",
+    "start": "next start",
+    "generate": "ts-node ./scripts/generator/index.ts",
+    "publish-social": "ts-node ./scripts/publisher/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.0",
+    "contentlayer": "^0.3.4",
+    "gray-matter": "^4.0.3",
+    "next": "^14.2.5",
+    "next-mdx-remote": "^5.0.0",
+    "next-sitemap": "^4.2.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.10",
+    "@types/node": "^20.11.30",
+    "@types/react": "^18.2.21",
+    "@types/react-dom": "^18.2.7",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
